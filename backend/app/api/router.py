@@ -7,6 +7,7 @@ from app.models.models import Batch, ConflictLog, Oven, Product
 from app.schemas.schemas import (
     BatchCreate,
     BatchOut,
+    BatchUpdate,
     ConflictOut,
     GanttBlock,
     OvenOut,
@@ -106,6 +107,35 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
         start_min=body.start_min,
     )
     db.add(batch)
+    db.commit()
+    db.refresh(batch)
+    return _batch_out(db, batch)
+
+
+@api_router.patch("/batches/{batch_id}", response_model=BatchOut)
+def reschedule_batch(batch_id: int, body: BatchUpdate, db: Session = Depends(get_db)):
+    batch = db.get(Batch, batch_id)
+    if not batch:
+        raise HTTPException(404, "批次不存在")
+    product = db.get(Product, batch.product_id)
+    if not product:
+        raise HTTPException(404, "产品不存在")
+    # Recompute ferment+bake intervals at the proposed start using the current
+    # product durations, then overlap-check against every OTHER batch on the
+    # same oven. Half-open intervals, so end-touching-start is allowed.
+    candidates = build_occupancies(batch.oven_id, batch.id, body.start_min, _recipe(product))
+    existing = [o for o in _all_occupancies(db) if o.batch_id != batch.id]
+    hits = find_conflicts(existing, candidates)
+    if hits:
+        ex, cand = hits[0]
+        detail = (
+            f"与批次#{ex.batch_id} 的 {ex.phase} 段重叠："
+            f"[{cand.interval.start},{cand.interval.end})"
+        )
+        # A rejected reschedule is not a new conflict event: do not log it and
+        # leave the batch (and therefore the Gantt) at its original start.
+        raise HTTPException(409, detail)
+    batch.start_min = body.start_min
     db.commit()
     db.refresh(batch)
     return _batch_out(db, batch)

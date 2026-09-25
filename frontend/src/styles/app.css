@@ -232,6 +232,8 @@ h2 {
   letter-spacing: .04em;
 }
 .toolbar { display: flex; gap: .75rem; flex-wrap: wrap; margin-bottom: 1rem; align-items: center; }
+.inline-edit { display: inline-flex; gap: .4rem; align-items: center; }
+.inline-edit button { padding: .3rem .55rem; font-size: .85rem; }
 select, input, .gantt-deck button, .toolbar button {
   background: var(--panel); color: var(--text); border: 1px solid var(--line);
   border-radius: 4px; padding: .5rem .75rem; font: inherit;
