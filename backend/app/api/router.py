@@ -7,6 +7,7 @@ from app.models.models import Batch, ConflictLog, Oven, Product
 from app.schemas.schemas import (
     BatchCreate,
     BatchOut,
+    BatchStartUpdate,
     ConflictOut,
     GanttBlock,
     OvenOut,
@@ -28,10 +29,12 @@ def _recipe(p: Product) -> RecipeDurations:
     return RecipeDurations(p.ferment_min, p.bake_min)
 
 
-def _all_occupancies(db: Session) -> list[Occupancy]:
+def _all_occupancies(db: Session, exclude_batch_id: int | None = None) -> list[Occupancy]:
     batches = db.scalars(select(Batch)).all()
     out: list[Occupancy] = []
     for b in batches:
+        if exclude_batch_id is not None and b.id == exclude_batch_id:
+            continue
         p = db.get(Product, b.product_id)
         if not p:
             continue
@@ -106,6 +109,35 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
         start_min=body.start_min,
     )
     db.add(batch)
+    db.commit()
+    db.refresh(batch)
+    return _batch_out(db, batch)
+
+
+@api_router.patch("/batches/{batch_id}/start", response_model=BatchOut)
+def update_batch_start(batch_id: int, body: BatchStartUpdate, db: Session = Depends(get_db)):
+    batch = db.get(Batch, batch_id)
+    if not batch:
+        raise HTTPException(404, "批次不存在")
+    product = db.get(Product, batch.product_id)
+    if not product:
+        raise HTTPException(404, "产品不存在")
+    recipe = _recipe(product)
+    # 候选段按当前产品时长从新开工分钟整体重算；现有占用排除本批次自身。
+    candidates = build_occupancies(batch.oven_id, batch.id, body.start_min, recipe)
+    existing = _all_occupancies(db, exclude_batch_id=batch.id)
+    hits = find_conflicts(existing, candidates)
+    if hits:
+        ex, cand = hits[0]
+        detail = (
+            f"与批次#{ex.batch_id} 的 {ex.phase} 段重叠："
+            f"[{cand.interval.start},{cand.interval.end})"
+        )
+        db.add(ConflictLog(batch_code=batch.code, oven_id=batch.oven_id, detail=detail))
+        db.commit()
+        raise HTTPException(409, detail)
+    # 无重叠（半开区间，端点相接允许）：发酵段与烘烤段一起搬到新开工分钟。
+    batch.start_min = body.start_min
     db.commit()
     db.refresh(batch)
     return _batch_out(db, batch)

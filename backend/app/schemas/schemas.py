@@ -38,6 +38,10 @@ class BatchCreate(BaseModel):
     code: str | None = None
 
 
+class BatchStartUpdate(BaseModel):
+    start_min: int = Field(ge=0, le=24 * 60 - 1)
+
+
 class GanttBlock(BaseModel):
     batch_id: int
     code: str
